@@ -1,6 +1,6 @@
 import requests
 
-ACCESS_TOKEN = "put_token_here"  # Получить можно в Pinterest Developer Portal
+ACCESS_TOKEN = "token"  # Получить можно в Pinterest Developer Portal
 
 def get_boards(access_token):
     url = "https://api.pinterest.com/v5/boards"
@@ -35,6 +35,30 @@ def get_all_boards(access_token):
     except Exception as e:
         print(f"Ошибка при запросе досок: {e}")
         return []
+
+
+# response = requests.get('https://api.pinterest.com/v5/user_account', headers=headers)
+ 
+
+def get_user_id(username, access_token):
+    url = f"https://api.pinterest.com/v5/users/{username}/"
+    # headers = {"Authorization": f"Bearer {access_token}"}
+    headers = {
+    'Authorization': f'Bearer {access_token}',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+}
+
+    try:
+        response = requests.get(url, headers=headers)
+        return response.json().get("id")
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return None
+
+# Пример использования
+USERNAME = "paspartu22"  # Без @
+user_id = get_user_id(USERNAME, ACCESS_TOKEN)
 
 boards = get_all_boards(ACCESS_TOKEN)
 print("Все доски (включая shared):")

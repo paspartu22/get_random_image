@@ -3,7 +3,7 @@ import random
 import webbrowser
 
 # Настройки
-ACCESS_TOKEN = "put key here"  # Ключ API
+ACCESS_TOKEN = "token"  # Ключ API
 MY_BOARD_ID = "636766903503568067"  # это моя маленькая борда на 3 случайных картинки
 
 # Это список досок, из которых он будет забирать пины, ID можно получить запустив get_board_id.py
