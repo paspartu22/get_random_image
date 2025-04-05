@@ -1,69 +1,72 @@
+import json
 import requests
 
-ACCESS_TOKEN = "token"  # Получить можно в Pinterest Developer Portal
+# Путь к файлу tokens.json
+TOKENS_FILE = "tokens.json"
 
-def get_boards(access_token):
-    url = "https://api.pinterest.com/v5/boards"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {"fields": "id,name,url"}
-    response = requests.get(url, headers=headers, params=params)
-    return response.json().get("items", [])
-
-# boards = get_boards(ACCESS_TOKEN)
-# print("Список досок в аккаунте")
-# for board in boards:
-#     print(f"Owner{board['owner']}, Name: {board['name']}, ID: {board['id']}")
-# input("Нажми любую клавишу, чтобы выйти")
-
-
-def get_all_boards(access_token):
+def load_user_token(user_id):
     """
-    Получает все доски: как созданные вами, так и те, куда вас добавили
+    Загружает токен пользователя из tokens.json
     """
-    url = "https://api.pinterest.com/v5/boards"  # Ключевое изменение!
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {
-        "fields": "id,name,url,owner",  # Добавляем owner для проверки владельца
-        "page_size": 100,  # Максимальное количество досок за один запрос
-        "privacy": "ALL"  # Получаем только shared доски
-    }
-    
     try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()  # Проверка ошибок
-        return response.json().get("items", [])
-    except Exception as e:
-        print(f"Ошибка при запросе досок: {e}")
-        return []
-
-
-# response = requests.get('https://api.pinterest.com/v5/user_account', headers=headers)
- 
-
-def get_user_id(username, access_token):
-    url = f"https://api.pinterest.com/v5/users/{username}/"
-    # headers = {"Authorization": f"Bearer {access_token}"}
-    headers = {
-    'Authorization': f'Bearer {access_token}',
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-}
-
-    try:
-        response = requests.get(url, headers=headers)
-        return response.json().get("id")
-    except Exception as e:
-        print(f"Ошибка: {e}")
+        with open(TOKENS_FILE, "r") as f:
+            tokens = json.load(f)
+            user_data = tokens.get(str(user_id))
+            if user_data and "access_token" in user_data:
+                return user_data["access_token"]
+            else:
+                print(f"Токен для пользователя {user_id} не найден.")
+                return None
+    except FileNotFoundError:
+        print(f"Файл {TOKENS_FILE} не найден.")
+        return None
+    except json.JSONDecodeError:
+        print(f"Ошибка чтения JSON из файла {TOKENS_FILE}.")
         return None
 
-# Пример использования
-USERNAME = "paspartu22"  # Без @
-user_id = get_user_id(USERNAME, ACCESS_TOKEN)
+def get_boards(access_token):
+    """
+    Получает список всех досок пользователя через Pinterest API с поддержкой пагинации
+    """
+    url = "https://api.pinterest.com/v5/boards"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    boards = []
+    next_page = None
 
-boards = get_all_boards(ACCESS_TOKEN)
-print("Все доски (включая shared):")
-for board in boards:
-    owner = board.get("owner", {}).get("username", "unknown")
-    print(f"Владелец: @{owner}, Название: {board['name']}, ID: {board['id']}")
+    while True:
+        params = {"page_size": 100}  # Увеличиваем количество элементов на странице
+        if next_page:
+            params["bookmark"] = next_page  # Добавляем bookmark для перехода на следующую страницу
 
-input("Нажмите Enter для выхода...")
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()  # Проверка на ошибки
+            data = response.json()
+            boards.extend(data.get("items", []))  # Добавляем доски из текущей страницы
+            next_page = data.get("bookmark")  # Получаем bookmark для следующей страницы
+
+            if not next_page:  # Если нет следующей страницы, выходим из цикла
+                break
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка при запросе досок: {e}")
+            break
+
+    return boards
+
+# ID пользователя из tokens.json
+USER_ID = 348404614
+
+# Загружаем токен пользователя
+access_token = load_user_token(USER_ID)
+
+if access_token:
+    # Получаем список досок
+    boards = get_boards(access_token)
+    print(f"Доступные доски ({len(boards)}):")
+    for board in boards:
+        # Проверяем наличие ключа 'url'
+        board_url = board.get('url', 'URL отсутствует')
+        print(f"Название: {board['name']}, ID: {board['id']}, URL: {board_url}")
+else:
+    print("Не удалось загрузить токен пользователя.")
+

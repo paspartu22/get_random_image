@@ -1,4 +1,5 @@
 import logging
+import telegram  # Импортируем весь модуль telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 import os
@@ -7,8 +8,8 @@ from base64 import urlsafe_b64encode
 import json
 import requests
 import random
-import asyncio  # Import asyncio for running multiple async tasks
-from oauth import start_oauth_server  # Import the OAuth server function
+import asyncio
+from oauth import start_oauth_server
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -83,17 +84,33 @@ def save_selected_boards_and_pins(user_id, selected_boards, all_pins):
 
 # Функция для получения списка досок пользователя
 def get_boards(access_token):
+    """
+    Получает список всех досок пользователя через Pinterest API с поддержкой пагинации
+    """
     url = "https://api.pinterest.com/v5/boards"
-    headers = {
-        "Authorization": f"Bearer {access_token}"
-    }
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code == 200:
-        return response.json().get('items', [])
-    else:
-        logger.error(f"Ошибка при получении досок: {response.status_code} - {response.text}")
-        return None
+    headers = {"Authorization": f"Bearer {access_token}"}
+    boards = []
+    next_page = None
+
+    while True:
+        params = {"page_size": 100}  # Увеличиваем количество элементов на странице
+        if next_page:
+            params["bookmark"] = next_page  # Добавляем bookmark для перехода на следующую страницу
+
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()  # Проверка на ошибки
+            data = response.json()
+            boards.extend(data.get("items", []))  # Добавляем доски из текущей страницы
+            next_page = data.get("bookmark")  # Получаем bookmark для следующей страницы
+
+            if not next_page:  # Если нет следующей страницы, выходим из цикла
+                break
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при запросе досок: {e}")
+            break
+
+    return boards
 
 # Функция для получения пинов из доски
 def get_pins_from_board(access_token, board_id):
@@ -148,14 +165,18 @@ def is_user_registered(user_id):
 # Функция для создания кнопок
 def create_buttons(user_id):
     if is_user_registered(user_id):
-        keyboard = [
-            [InlineKeyboardButton("Настроить список досок", callback_data='set_boards')],
-            [InlineKeyboardButton("Следующая картинка", callback_data='next_image')]
-        ]
+        # Загружаем данные пользователя
+        token_data = load_token(user_id)
+        has_pins = token_data and 'pins' in token_data and len(token_data['pins']) > 0
+        
+        # Формируем кнопки
+        keyboard = [[InlineKeyboardButton("Настроить список досок", callback_data='set_boards')]]
+        
+        if has_pins:
+            keyboard.append([InlineKeyboardButton("Следующая картинка", callback_data='next_image')])
     else:
-        keyboard = [
-            [InlineKeyboardButton("Register with Pinterest", callback_data='register')]
-        ]
+        keyboard = [[InlineKeyboardButton("Register with Pinterest", callback_data='register')]]
+    
     return InlineKeyboardMarkup(keyboard)
 
 # Обработчик для выбора досок
@@ -170,7 +191,11 @@ async def select_boards_handler(update, context):
     if 'selected_boards' not in context.user_data:
         context.user_data['selected_boards'] = []
     
-    if selected_board_id not in context.user_data['selected_boards']:
+    if selected_board_id in context.user_data['selected_boards']:
+        # Если доска уже выбрана, снимаем выбор
+        context.user_data['selected_boards'].remove(selected_board_id)
+    else:
+        # Если доска не выбрана, добавляем её
         context.user_data['selected_boards'].append(selected_board_id)
     
     # Загружаем токен пользователя
@@ -242,6 +267,20 @@ async def finish_selection_handler(update, context):
         )
         return
     
+    # Получаем список досок
+    boards = get_boards(access_token)
+    if boards is None:
+        await query.edit_message_text(
+            "Не удалось получить список досок. Проверьте токен или повторите попытку позже.",
+            reply_markup=create_buttons(telegram_user_id)
+        )
+        return
+    
+    # Сопоставляем ID выбранных досок с их именами
+    selected_board_names = [
+        board['name'] for board in boards if board['id'] in selected_boards
+    ]
+    
     # Собираем все пины из выбранных досок в единый массив
     all_pins = []
     for board_id in selected_boards:
@@ -251,8 +290,10 @@ async def finish_selection_handler(update, context):
     # Сохраняем выбранные доски и их пины в tokens.json
     save_selected_boards_and_pins(telegram_user_id, selected_boards, all_pins)
     
+    # Формируем сообщение с именами выбранных досок
+    board_names_message = "\n".join(selected_board_names)
     await query.edit_message_text(
-        f"Выбор завершён. Выбранные доски: {', '.join(selected_boards)}",
+        f"Выбор завершён. Выбранные доски:\n{board_names_message}",
         reply_markup=create_buttons(telegram_user_id)
     )
 
@@ -289,23 +330,44 @@ async def set_boards_handler(update, context):
         )
         return
     
+    # Загружаем выбранные доски из tokens.json
+    selected_boards = token_data.get('selected_boards', [])
+    context.user_data['selected_boards'] = selected_boards  # Сохраняем выбранные доски в контексте
+    
     # Формируем кнопки для выбора досок
     keyboard = [
-        [InlineKeyboardButton(board['name'], callback_data=f"select_board:{board['id']}")]
+        [InlineKeyboardButton(
+            f"{board['name']} {'✅' if board['id'] in selected_boards else ''}",
+            callback_data=f"select_board:{board['id']}"
+        )]
         for board in boards
     ]
     keyboard.append([InlineKeyboardButton("Завершить выбор", callback_data="finish_selection")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Выберите доски:", reply_markup=reply_markup)
+    
+    # Проверяем, можно ли отредактировать сообщение
+    try:
+        await query.edit_message_text("Выберите доски (выбранные отмечены галочкой):", reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "message to edit" in str(e):
+            # Если сообщение нельзя отредактировать, отправляем новое сообщение
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Выберите доски (выбранные отмечены галочкой):",
+                reply_markup=reply_markup
+            )
 
 # Обновление обработчиков для использования кнопок
 async def next_image_handler(update, context):
+    query = update.callback_query
+    await query.answer()  # Подтверждаем обработку запроса
+
     telegram_user_id = update.effective_user.id
     
     # Проверяем, зарегистрирован ли пользователь
     if not is_user_registered(telegram_user_id):
-        await update.callback_query.edit_message_text(
+        await query.edit_message_text(
             "Вы не зарегистрированы. Пожалуйста, зарегистрируйтесь через Pinterest.",
             reply_markup=create_buttons(telegram_user_id)
         )
@@ -315,7 +377,7 @@ async def next_image_handler(update, context):
     token_data = load_token(telegram_user_id)
     access_token = token_data.get('access_token')
     if not access_token:
-        await update.callback_query.edit_message_text(
+        await query.edit_message_text(
             "Токен недействителен. Пожалуйста, зарегистрируйтесь заново.",
             reply_markup=create_buttons(telegram_user_id)
         )
@@ -324,7 +386,7 @@ async def next_image_handler(update, context):
     # Получаем случайный пин
     random_pin = get_random_pin(telegram_user_id)
     if not random_pin:
-        await update.callback_query.edit_message_text(
+        await query.edit_message_text(
             "Не удалось найти пины. Убедитесь, что вы выбрали доски.",
             reply_markup=create_buttons(telegram_user_id)
         )
@@ -333,7 +395,7 @@ async def next_image_handler(update, context):
     # Получаем данные пина (URL изображения и заголовок)
     pin_details = get_pin_details(access_token, random_pin)
     if not pin_details or not pin_details.get("image_url"):
-        await update.callback_query.edit_message_text(
+        await query.edit_message_text(
             "Не удалось загрузить изображение. Попробуйте снова.",
             reply_markup=create_buttons(telegram_user_id)
         )
@@ -372,6 +434,18 @@ async def button_handler(update, context):
         await query.edit_message_text(
             text=f"Нажмите на ссылку, чтобы авторизоваться:\n{auth_url}",
             disable_web_page_preview=True
+        )
+        
+        # После отправки ссылки добавляем кнопку "Настроить список досок"
+        keyboard = [
+            [InlineKeyboardButton("Настроить список досок", callback_data='set_boards')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="После завершения регистрации нажмите на кнопку ниже, чтобы настроить список досок:",
+            reply_markup=reply_markup
         )
 
 def generate_auth_url(telegram_user_id):
