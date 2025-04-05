@@ -13,6 +13,7 @@ load_dotenv()
 CLIENT_ID = os.getenv('PINTEREST_CLIENT_ID')
 REDIRECT_URI = os.getenv('PINTEREST_REDIRECT_URI')
 CLIENT_SECRET = os.getenv('PINTEREST_CLIENT_SECRET')
+MY_ADDRESS = os.getenv('MY_ADDRESS')
 
 # Получаем путь текущей директории скрипта
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -104,7 +105,7 @@ def callback():
 
 
 def start_oauth_server():
-    app.run(host='192.168.1.97', port=5001)
+    app.run(host = MY_ADDRESS, port = 5001)
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.97', port=5001)
+    app.run(host = MY_ADDRESS, port = 5001)
